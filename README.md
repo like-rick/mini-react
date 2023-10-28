@@ -11,3 +11,4 @@ we use fiber to represent virtual dom. fiber includes some important filed which
 we can easily iterate all fiber nodes by linking different fibers. Notice that in tag v1.0, we still update dom in synchronous mode. 
 
 tag v2.0
+in v2.0, wen support concurrent mode by simulate requestIdleCallback. and support Function Component.

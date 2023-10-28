@@ -1,3 +1,4 @@
+import '../requestIdleCallbackPolyfill';
 function createElement(type, props, ...children) {
     return {
         type,
@@ -69,13 +70,13 @@ class MiniReact {
         }
         workInProgressRoot = this._internalRoot;
         workInProgress = workInProgressRoot.current.alternate;
-        workLoop(workInProgress);
-
+        window.requestIdleCallback(workLoop); 
+        // workLoop(workInProgress);
     }
 
 }
 
-function workLoop(workInProgress) {
+function workLoop() { 
     while(workInProgress) {
         workInProgress = performUnitOfWork(workInProgress);
     }
@@ -83,15 +84,24 @@ function workLoop(workInProgress) {
 
 function performUnitOfWork(fiber) {
     // process current fiber : create fiber dom and traverse it`s children and craet a link between fiber and child
-    if (!fiber.stateNode) {
-        // crate dom
+    const isFunctionComponent = typeof fiber.type === 'function';
+    if (isFunctionComponent) { 
+        fiber.props.children = [fiber.type(fiber.props)]
+    } else if (!fiber.stateNode) {
+        // crate dom 
         fiber.stateNode = fiber.type === 'HostText' ? document.createTextNode(fiber.nodeValue) : document.createElement(fiber.type);
         // add property
         Object.keys(fiber.props).filter(isProperty).forEach(key => fiber.stateNode[key] = fiber.props[key]);
     }
 
-    if (fiber.return) {
-        fiber.return.stateNode.appendChild(fiber.stateNode);
+    if (fiber.return) { 
+        let parentFiber = fiber.return;
+        while(!parentFiber.stateNode) {
+            parentFiber = parentFiber.return;
+        }
+        if (fiber.stateNode) {
+            parentFiber.stateNode.appendChild(fiber.stateNode);
+        }
     }
 
     // create links
@@ -103,6 +113,7 @@ function performUnitOfWork(fiber) {
             props: child.props,
             stateNode: null,
         };
+
         if (index === 0) {
             fiber.child = newFiber;
         } else if (previousFiber) {
@@ -134,4 +145,22 @@ function createRoot(container) {
     return new MiniReact(container);
 }
 
-export default { createElement, createRoot }
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function act(callback): Promise<void> {
+    callback();
+    return new Promise((resolve) => {
+        function loop() {
+            if (workInProgress) {
+                window.requestIdleCallback(loop);
+            } else {
+                resolve();
+            }
+        }
+        loop();
+    })
+}
+
+export default { createElement, createRoot, sleep, act }
