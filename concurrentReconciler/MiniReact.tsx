@@ -4,7 +4,7 @@ function createElement(type, props, ...children) {
         type,
         props: {
             ...props,
-            children: children.map(child => {
+            children: children.flat().map(child => {
                 return typeof child !== 'object' ? createTextElement(child) : child;
             })
         }
@@ -34,9 +34,11 @@ interface Ifiber {
     type: string,
     return: Ifiber,
     stateNode: HTMLElement | null,
+    alternate: Ifiber | null,
     props: Element['props'],
     sibling?: Ifiber,
     child?: Ifiber,
+    memorizedState?: Array<any>, // store Function Component state
 }
 
 interface IinternalRoot {
@@ -47,7 +49,10 @@ interface IinternalRoot {
 const isProperty = (key) => key !== 'children';
 
 let workInProgress: IinternalRoot['current']['alternate'] | null = null; // current working node
-let workInProgressRoot: IinternalRoot | null = null; // virtual root node
+let workInProgressRoot: IinternalRoot; // virtual root node
+
+let currentHookFiber: Ifiber; // 
+let currentHookFiberIndex: number  = 0;
 
 class MiniReact {
 
@@ -80,14 +85,23 @@ function workLoop() {
     while(workInProgress) {
         workInProgress = performUnitOfWork(workInProgress);
     }
+
+    // if current render peroid complete, then switch workInProgressRoot's alternate property with current property, and set alternate property to null
+    if (!workInProgress && workInProgressRoot.current.alternate) { 
+        workInProgressRoot.current = workInProgressRoot.current.alternate;
+        workInProgressRoot.current.alternate = null;
+    }
 }
 
 function performUnitOfWork(fiber) {
     // process current fiber : create fiber dom and traverse it`s children and craet a link between fiber and child
-    const isFunctionComponent = typeof fiber.type === 'function';
-    if (isFunctionComponent) { 
-        fiber.props.children = [fiber.type(fiber.props)]
-    } else if (!fiber.stateNode) {
+    const isFunctionComponent = typeof fiber.type === 'function';   
+    if (isFunctionComponent) {  
+        currentHookFiber = fiber;
+        currentHookFiber.memorizedState = []
+        currentHookFiberIndex = 0;
+        fiber.props.children = [fiber.type(fiber.props)]; 
+    } else if (!fiber.stateNode) { 
         // crate dom 
         fiber.stateNode = fiber.type === 'HostText' ? document.createTextNode(fiber.nodeValue) : document.createElement(fiber.type);
         // add property
@@ -95,6 +109,7 @@ function performUnitOfWork(fiber) {
     }
 
     if (fiber.return) { 
+        // because Function Component does have not its own stateNode property, we find fiber forward by the link relation until which has stateNode peoperty
         let parentFiber = fiber.return;
         while(!parentFiber.stateNode) {
             parentFiber = parentFiber.return;
@@ -106,13 +121,34 @@ function performUnitOfWork(fiber) {
 
     // create links
     let previousFiber: Ifiber | null = null;
+    // in mount period, there do not exist alternate in fiber  and when corresponing fiber mounted it will own alternate fiber. so here we firstly check whether the fiber is mounted or not
+    let oldFiber: Ifiber | undefined = fiber.alternate?.child;
     fiber.props.children.forEach((child, index) => {
-        const newFiber: Ifiber = {
-            type: child.type,
-            return: fiber,
-            props: child.props,
-            stateNode: null,
-        };
+        let newFiber: Ifiber;
+        if (!oldFiber) {
+            // mount period
+            newFiber = {
+                type: child.type,
+                stateNode: null,
+                props: child.props,
+                return: fiber,
+                alternate: null,
+            };
+        } else {
+            // update period
+            newFiber = {
+                type: child.type,
+                stateNode: oldFiber.stateNode,
+                props: child.props,
+                return: fiber,
+                alternate: oldFiber,
+            };
+        }
+
+        // find corresponding oldFiber
+        if (oldFiber) {
+            oldFiber = oldFiber.sibling;
+        }
 
         if (index === 0) {
             fiber.child = newFiber;
@@ -140,6 +176,47 @@ function getNextFiber(fiber: Ifiber) {
     return null;
 }
 
+function useState(initialState) {
+    const oldHook = currentHookFiber.alternate?.memorizedState?.[currentHookFiberIndex];
+    const hook = {
+        state: oldHook ? oldHook.state : initialState,
+        queue: [],
+        dispatch: oldHook ? oldHook.dispatch : null,
+    }
+ 
+    const actions = oldHook ? oldHook.queue : [];
+    actions.forEach(action => {
+        hook.state = typeof action === 'function' ? action(hook.state) : action;
+    });
+    if (!hook.dispatch) {
+        hook.dispatch = function (oldHook) {
+            return (action) => {
+                oldHook.queue.push(action);   
+                // re-rerender 
+                workInProgressRoot.current.alternate = {
+                    stateNode: workInProgressRoot.current.containerInfo,
+                    props: workInProgressRoot.current.props,
+                    alternate: workInProgressRoot.current, // 重要，交换 alternate
+                };
+                workInProgress = workInProgressRoot.current.alternate;
+                window.requestIdleCallback(workLoop);
+            }
+        }
+    }
+    const setState = hook.dispatch(hook); 
+    currentHookFiber.memorizedState?.push(hook);
+    currentHookFiberIndex++;
+    return [hook.state, setState];
+}
+function useReducer(reducer, initialState) {
+    const [state, setState] = useState(initialState);
+    const dispatch = (action) => {
+      // reducer = (oldState, action) => newState
+      setState((state) => reducer(state, action));
+    };
+    return [state, dispatch];
+  }
+
 function createRoot(container) {
     // container is the root
     return new MiniReact(container);
@@ -163,4 +240,4 @@ function act(callback): Promise<void> {
     })
 }
 
-export default { createElement, createRoot, sleep, act }
+export default { createElement, createRoot, sleep, act, useState, useReducer }
